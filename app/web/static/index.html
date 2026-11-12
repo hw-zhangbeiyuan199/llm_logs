@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LLM Gateway</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a; --text:#e6e9ef; --muted:#8b93a4; --accent:#4f8cff; --green:#34c759; --red:#ff5c5c; --amber:#ffb02e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif; font-size:13px; }
+  a { color:var(--accent); text-decoration:none; }
+  .app { max-width:1400px; margin:0 auto; padding:16px; }
+  header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  header h1 span { color:var(--muted); font-weight:400; font-size:12px; margin-left:8px; }
+  .btn { background:var(--panel2); color:var(--text); border:1px solid var(--border); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn-primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  .card .label { color:var(--muted); font-size:11px; }
+  .card .value { font-size:22px; font-weight:600; margin-top:4px; }
+  .card .sub { color:var(--muted); font-size:11px; margin-top:2px; }
+  .filters { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:12px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .filters input, .filters select { background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:6px 10px; font-size:12px; }
+  .filters label { color:var(--muted); font-size:11px; display:flex; align-items:center; gap:4px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  th, td { padding:9px 10px; text-align:left; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.04em; background:var(--panel2); }
+  tr:hover td { background:var(--panel2); cursor:pointer; }
+  .tag { display:inline-block; padding:1px 7px; border-radius:4px; font-size:11px; }
+  .tag.stream { background:rgba(79,140,255,.15); color:var(--accent); }
+  .tag.block { background:rgba(139,147,164,.15); color:var(--muted); }
+  .status { font-variant-numeric:tabular-nums; }
+  .status.ok { color:var(--green); } .status.err { color:var(--red); }
+  .pager { display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+  .muted { color:var(--muted); }
+  .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal { background:var(--panel); border:1px solid var(--border); border-radius:12px; width:80%; max-width:920px; max-height:85vh; display:flex; flex-direction:column; }
+  .modal-head { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+  .modal-body { padding:14px 18px; overflow:auto; }
+  .modal-body h4 { margin:14px 0 6px; color:var(--muted); font-size:11px; text-transform:uppercase; }
+  .modal-body h4.with-copy { display:flex; align-items:center; justify-content:space-between; }
+  .btn.mini { padding:2px 8px; font-size:11px; text-transform:none; }
+  pre { background:#0b0d12; border:1px solid var(--border); border-radius:8px; padding:12px; overflow:auto; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; max-height:340px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .meta-row { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px; }
+  .meta-row .k { color:var(--muted); } .meta-row .v { color:var(--text); }
+  .auto-refresh { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .spin { animation:spin 1s linear infinite; } @keyframes spin { to { transform:rotate(360deg); } }
+  .config-editor { width:100%; height:460px; background:#0b0d12; border:1px solid var(--border); border-radius:8px;
+    color:#e6e9ef; padding:12px; font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    font-size:12.5px; line-height:1.55; resize:vertical; tab-size:2; white-space:pre; overflow:auto; }
+  .config-editor:focus { outline:none; border-color:var(--accent); }
+  .cfg-status { font-size:12px; padding:6px 10px; border-radius:6px; }
+  .cfg-status.ok { background:rgba(52,199,89,.12); color:var(--green); }
+  .cfg-status.err { background:rgba(255,92,92,.12); color:var(--red); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="app">
+    <header>
+      <h1>LLM Gateway <span>请求转发与日志</span></h1>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label class="auto-refresh">
+          <input type="checkbox" v-model="autoRefresh" /> 自动刷新 5s
+          <span v-if="loading" class="spin">⟳</span>
+        </label>
+        <button class="btn" @click="refreshAll">刷新</button>
+        <button class="btn" @click="openConfigEditor">配置文件</button>
+      </div>
+    </header>
+
+    <div class="cards">
+      <div class="card"><div class="label">总请求 ({{stats.hours}}h)</div><div class="value">{{stats.total}}</div><div class="sub">{{stats.by_route.length}} 条路由活跃</div></div>
+      <div class="card"><div class="label">总 Tokens ({{stats.hours}}h)</div><div class="value">{{fmtNum(stats.total_tokens)}}</div><div class="sub">prompt+completion</div></div>
+      <div class="card"><div class="label">平均耗时</div><div class="value">{{fmtNum(Math.round(stats.avg_latency_ms))}}<span style="font-size:12px;color:var(--muted)"> ms</span></div><div class="sub">含流式全程</div></div>
+      <div class="card"><div class="label">错误率</div><div class="value" :class="stats.error_rate>5?'':'ok'">{{stats.error_rate}}%</div><div class="sub">{{errCount}} 次错误</div></div>
+    </div>
+
+    <div class="filters">
+      <label>关键词 <input v-model="filters.keyword" placeholder="搜索请求/响应" @keyup.enter="search" style="width:160px"/></label>
+      <label>来源IP <input v-model="filters.source_ip" placeholder="如 192.168.1.5" style="width:130px"/></label>
+      <label>模型 <input v-model="filters.model" placeholder="如 gpt-4o" style="width:110px"/></label>
+      <label>状态
+        <select v-model="filters.status"><option value="">全部</option><option value="success">成功</option><option value="error">错误</option></select>
+      </label>
+      <label>模式
+        <select v-model="filters.is_stream"><option value="">全部</option><option value="true">流式</option><option value="false">阻塞</option></select>
+      </label>
+      <label>路由 <input v-model="filters.route_name" placeholder="" style="width:100px"/></label>
+      <button class="btn btn-primary" @click="search">查询</button>
+      <button class="btn" @click="resetFilters">重置</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>时间</th><th>来源IP</th><th>路由</th><th>模型</th>
+          <th>模式</th><th>状态</th><th>耗时</th><th>输入</th><th>输出</th><th>总计</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="r in logs.items" :key="r.id" @click="openDetail(r.id)">
+          <td>{{r.id}}</td>
+          <td class="muted">{{fmtTime(r.ts)}}</td>
+          <td>{{r.source_ip}}</td>
+          <td>{{r.route_name}}</td>
+          <td>{{r.model || '-'}}</td>
+          <td><span class="tag" :class="r.is_stream?'stream':'block'">{{r.is_stream?'流':'阻'}}</span></td>
+          <td><span class="status" :class="statusClass(r.status_code)">{{r.status_code || 'ERR'}}</span></td>
+          <td class="muted">{{fmtNum(r.latency_ms)}} ms</td>
+          <td class="muted">{{fmtNum(r.prompt_tokens)}}</td>
+          <td class="muted">{{fmtNum(r.completion_tokens)}}</td>
+          <td class="muted">{{fmtNum(r.total_tokens)}}</td>
+        </tr>
+        <tr v-if="!logs.items.length"><td colspan="11" class="muted" style="text-align:center;padding:30px;">暂无记录</td></tr>
+      </tbody>
+    </table>
+
+    <div class="pager">
+      <span class="muted">共 {{fmtNum(logs.total)}} 条，第 {{filters.page}} / {{totalPages}} 页</span>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <label class="muted">每页
+          <select v-model.number="filters.page_size" @change="filters.page=1;loadLogs()">
+            <option :value="20">20</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+          </select>
+        </label>
+        <button class="btn" :disabled="filters.page<=1" @click="filters.page--;loadLogs()">上一页</button>
+        <button class="btn" :disabled="filters.page>=totalPages" @click="filters.page++;loadLogs()">下一页</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" v-if="detail" @click.self="detail=null">
+    <div class="modal">
+      <div class="modal-head">
+        <div>请求详情 #{{detail.id}}</div>
+        <button class="btn" @click="detail=null">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="meta-row">
+          <div><span class="k">时间 </span><span class="v">{{fmtTime(detail.ts)}}</span></div>
+          <div><span class="k">来源 </span><span class="v">{{detail.source_ip}}</span></div>
+          <div><span class="k">路由 </span><span class="v">{{detail.route_name}}</span></div>
+          <div><span class="k">路径 </span><span class="v">{{detail.method}} {{detail.path}}</span></div>
+          <div><span class="k">模式 </span><span class="v">{{detail.is_stream?'流式':'阻塞'}}</span></div>
+        </div>
+        <div class="meta-row">
+          <div><span class="k">模型 </span><span class="v">{{detail.model || '-'}}</span></div>
+          <div><span class="k">状态 </span><span class="v status" :class="statusClass(detail.status_code)">{{detail.status_code}}</span></div>
+          <div><span class="k">耗时 </span><span class="v">{{detail.latency_ms}}ms</span></div>
+          <div><span class="k">Tokens </span><span class="v">{{detail.prompt_tokens||0}} + {{detail.completion_tokens||0}} = {{detail.total_tokens||0}}</span></div>
+          <div><span class="k">上游 </span><span class="v">{{detail.upstream_url}}</span></div>
+        </div>
+        <div v-if="detail.error"><h4>错误</h4><pre style="color:var(--red)">{{detail.error}}</pre></div>
+        <div class="grid2">
+          <div>
+            <h4 class="with-copy">请求体 <button class="btn mini" @click="copyText(pretty(detail.request_body), $event)">复制</button></h4>
+            <pre>{{pretty(detail.request_body)}}</pre>
+          </div>
+          <div>
+            <h4 class="with-copy">响应{{detail.is_stream?' (流式汇总)':''}} <button class="btn mini" @click="copyText(pretty(detail.response_body), $event)">复制</button></h4>
+            <pre>{{pretty(detail.response_body)}}</pre>
+          </div>
+        </div>
+        <div v-if="detail.reasoning" style="margin-top:12px;">
+          <h4 class="with-copy">推理思维链 (reasoning_content) <button class="btn mini" @click="copyText(detail.reasoning, $event)">复制</button></h4>
+          <pre>{{detail.reasoning}}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" v-if="configEditor.open" @click.self="configEditor.open=false">
+    <div class="modal" style="max-width:780px;">
+      <div class="modal-head">
+        <div>配置文件 <span class="muted" style="font-size:12px;">config.yaml — 保存后立即重载生效</span></div>
+        <button class="btn" @click="configEditor.open=false">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div v-if="configEditor.result" class="cfg-status" :class="configEditor.result.ok?'ok':'err'">
+          {{configEditor.result.ok?'重载成功':'重载失败'}}：{{configEditor.result.message}}
+        </div>
+        <textarea v-model="configEditor.text" class="config-editor" spellcheck="false"></textarea>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-primary" :disabled="configEditor.saving" @click="saveConfig">
+            {{configEditor.saving?'保存中...':'保存并重载'}}
+          </button>
+          <button class="btn" @click="openConfigEditor">重新加载原文</button>
+          <span class="muted" style="font-size:11px;">提示：修改 routes / 超时 / 限流等可热重载；server.host:port 与 db_path 需重启进程</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp, reactive, ref, computed, onMounted, onUnmounted, watch } = Vue;
+createApp({
+  setup() {
+    const stats = reactive({ total:0, total_tokens:0, avg_latency_ms:0, error_rate:0, by_route:[], by_model:[], hours:24 });
+    const logs = reactive({ items:[], total:0 });
+    const filters = reactive({ keyword:'', source_ip:'', model:'', status:'', is_stream:'', route_name:'', page:1, page_size:20 });
+    const detail = ref(null);
+    const loading = ref(false);
+    const autoRefresh = ref(false);
+    const configEditor = reactive({ open:false, text:'', saving:false, result:null });
+    let timer = null, refreshTimer = null;
+
+    const totalPages = computed(() => Math.max(1, Math.ceil(logs.total / filters.page_size)));
+    const errCount = computed(() => stats.total ? Math.round(stats.total * stats.error_rate / 100) : 0);
+
+    function params(extra={}) {
+      const p = new URLSearchParams();
+      for (const [k,v] of Object.entries({...filters, ...extra})) {
+        if (v !== '' && v != null) p.append(k, v);
+      }
+      return p;
+    }
+    async function loadLogs() {
+      loading.value = true;
+      try {
+        const r = await fetch('/api/logs?' + params());
+        const d = await r.json();
+        logs.items = d.items; logs.total = d.total;
+      } finally { loading.value = false; }
+    }
+    async function loadStats() {
+      const r = await fetch('/api/stats?hours=24');
+      Object.assign(stats, await r.json());
+    }
+    async function refreshAll() {
+      await Promise.all([loadLogs(), loadStats()]);
+    }
+    async function openConfigEditor() {
+      configEditor.open = true;
+      configEditor.result = null;
+      try {
+        const r = await fetch('/admin/config/raw');
+        const d = await r.json();
+        configEditor.text = d.text || '';
+      } catch (e) {
+        configEditor.result = { ok:false, message:'加载失败: ' + e };
+      }
+    }
+    async function saveConfig() {
+      configEditor.saving = true;
+      configEditor.result = null;
+      try {
+        const r = await fetch('/admin/config', {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ text: configEditor.text }),
+        });
+        configEditor.result = await r.json();
+        if (configEditor.result.ok) { loadStats(); loadLogs(); }
+      } catch (e) {
+        configEditor.result = { ok:false, message:'保存失败: ' + e };
+      } finally {
+        configEditor.saving = false;
+      }
+    }
+    function search() { filters.page = 1; loadLogs(); }
+    function resetFilters() { Object.assign(filters, {keyword:'',source_ip:'',model:'',status:'',is_stream:'',route_name:'',page:1}); loadLogs(); }
+    async function openDetail(id) {
+      const r = await fetch('/api/logs/' + id);
+      detail.value = await r.json();
+    }
+    function fmtTime(s) { if(!s) return ''; const d=new Date(s+(s.endsWith('Z')?'':'Z')); return d.toLocaleString('zh-CN',{hour12:false}); }
+    function fmtNum(n) { return (n||0).toLocaleString(); }
+    function statusClass(c) { return c==null?'err':(c>=200&&c<300?'ok':'err'); }
+    function pretty(s) { if(!s) return '(空)'; try { return JSON.stringify(JSON.parse(s), null, 2); } catch(e) { return s; } }
+    async function copyText(text, ev) {
+      const btn = ev && ev.target ? ev.target.closest('button') : null;
+      const done = () => { if (btn) { const o = btn.textContent; btn.textContent = '已复制'; setTimeout(() => btn.textContent = o, 1200); } };
+      try {
+        await navigator.clipboard.writeText(text || '');
+        done();
+      } catch (e) {
+        const ta = document.createElement('textarea'); ta.value = text || '';
+        ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); done(); } catch (_) {}
+        document.body.removeChild(ta);
+      }
+    }
+
+    onMounted(() => { loadStats(); loadLogs(); timer=setInterval(loadStats, 15000); });
+    onUnmounted(() => { clearInterval(timer); clearInterval(refreshTimer); });
+    watch(autoRefresh, (v) => {
+      if (v) { refreshTimer = setInterval(loadLogs, 5000); }
+      else { clearInterval(refreshTimer); refreshTimer = null; }
+    });
+
+    return { stats, logs, filters, detail, loading, autoRefresh, configEditor, totalPages, errCount,
+             loadLogs, loadStats, refreshAll, openConfigEditor, saveConfig,
+              search, resetFilters, openDetail, fmtTime, fmtNum, statusClass, pretty, copyText };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
