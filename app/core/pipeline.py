@@ -31,6 +31,9 @@ class RequestContext:
     model: Optional[str] = None
     is_stream: bool = False
     request_body: dict = field(default_factory=dict)
+    # agent_hint 提取的会话信息（只读，不改 body）
+    session_id: str = ""
+    parent_session_id: str = ""
     # Hook 可设置以中止请求
     abort_status: int = 0
     abort_message: str = ""

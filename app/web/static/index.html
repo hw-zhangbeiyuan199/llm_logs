@@ -43,6 +43,7 @@
   .modal-body h4 { margin:14px 0 6px; color:var(--muted); font-size:11px; text-transform:uppercase; }
   .modal-body h4.with-copy { display:flex; align-items:center; justify-content:space-between; }
   .btn.mini { padding:2px 8px; font-size:11px; text-transform:none; }
+  td.sid { font-family:ui-monospace,Consolas,monospace; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   pre { background:#0b0d12; border:1px solid var(--border); border-radius:8px; padding:12px; overflow:auto; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; max-height:340px; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .meta-row { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px; }
@@ -98,25 +99,29 @@
     <table>
       <thead>
         <tr>
-          <th>ID</th><th>时间</th><th>来源IP</th><th>路由</th><th>模型</th>
-          <th>模式</th><th>状态</th><th>耗时</th><th>输入</th><th>输出</th><th>总计</th>
+          <th>ID</th><th>时间</th><th>路由</th><th>模型</th><th>session_id</th><th>parent_session_id</th>
+          <th>模式</th><th>状态</th><th>耗时</th><th>首Token</th><th>输入</th><th>输出</th><th>缓存命中</th><th>推理</th><th>总计</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="r in logs.items" :key="r.id" @click="openDetail(r.id)">
           <td>{{r.id}}</td>
           <td class="muted">{{fmtTime(r.ts)}}</td>
-          <td>{{r.source_ip}}</td>
           <td>{{r.route_name}}</td>
           <td>{{r.model || '-'}}</td>
+          <td class="muted sid" :title="r.session_id">{{short(r.session_id)}}</td>
+          <td class="muted sid" :title="r.parent_session_id">{{short(r.parent_session_id)}}</td>
           <td><span class="tag" :class="r.is_stream?'stream':'block'">{{r.is_stream?'流':'阻'}}</span></td>
           <td><span class="status" :class="statusClass(r.status_code)">{{r.status_code || 'ERR'}}</span></td>
           <td class="muted">{{fmtNum(r.latency_ms)}} ms</td>
+          <td class="muted">{{r.ttft_ms!=null ? fmtNum(r.ttft_ms)+' ms' : '-'}}</td>
           <td class="muted">{{fmtNum(r.prompt_tokens)}}</td>
           <td class="muted">{{fmtNum(r.completion_tokens)}}</td>
+          <td class="muted">{{fmtNum(r.cached_tokens)}}</td>
+          <td class="muted">{{fmtNum(r.reasoning_tokens)}}</td>
           <td class="muted">{{fmtNum(r.total_tokens)}}</td>
         </tr>
-        <tr v-if="!logs.items.length"><td colspan="11" class="muted" style="text-align:center;padding:30px;">暂无记录</td></tr>
+        <tr v-if="!logs.items.length"><td colspan="15" class="muted" style="text-align:center;padding:30px;">暂无记录</td></tr>
       </tbody>
     </table>
 
@@ -152,9 +157,14 @@
         </div>
         <div class="meta-row">
           <div><span class="k">模型 </span><span class="v">{{detail.model || '-'}}</span></div>
+          <div><span class="k">session </span><span class="v">{{detail.session_id || '-'}}</span></div>
+          <div><span class="k">parent </span><span class="v">{{detail.parent_session_id || '-'}}</span></div>
           <div><span class="k">状态 </span><span class="v status" :class="statusClass(detail.status_code)">{{detail.status_code}}</span></div>
-          <div><span class="k">耗时 </span><span class="v">{{detail.latency_ms}}ms</span></div>
+          <div><span class="k">耗时 </span><span class="v">{{fmtNum(detail.latency_ms)}} ms</span></div>
+          <div><span class="k">首Token </span><span class="v">{{detail.ttft_ms!=null ? fmtNum(detail.ttft_ms)+' ms' : '-'}}</span></div>
           <div><span class="k">Tokens </span><span class="v">{{detail.prompt_tokens||0}} + {{detail.completion_tokens||0}} = {{detail.total_tokens||0}}</span></div>
+          <div><span class="k">缓存命中 </span><span class="v">{{fmtNum(detail.cached_tokens)}}</span></div>
+          <div><span class="k">推理Tokens </span><span class="v">{{fmtNum(detail.reasoning_tokens)}}</span></div>
           <div><span class="k">上游 </span><span class="v">{{detail.upstream_url}}</span></div>
         </div>
         <div v-if="detail.error"><h4>错误</h4><pre style="color:var(--red)">{{detail.error}}</pre></div>
@@ -274,6 +284,7 @@ createApp({
     function fmtNum(n) { return (n||0).toLocaleString(); }
     function statusClass(c) { return c==null?'err':(c>=200&&c<300?'ok':'err'); }
     function pretty(s) { if(!s) return '(空)'; try { return JSON.stringify(JSON.parse(s), null, 2); } catch(e) { return s; } }
+    function short(s, n=16) { return s ? (s.length>n ? s.slice(0,n)+'…' : s) : '-'; }
     async function copyText(text, ev) {
       const btn = ev && ev.target ? ev.target.closest('button') : null;
       const done = () => { if (btn) { const o = btn.textContent; btn.textContent = '已复制'; setTimeout(() => btn.textContent = o, 1200); } };
@@ -297,7 +308,7 @@ createApp({
 
     return { stats, logs, filters, detail, loading, autoRefresh, configEditor, totalPages, errCount,
              loadLogs, loadStats, refreshAll, openConfigEditor, saveConfig,
-              search, resetFilters, openDetail, fmtTime, fmtNum, statusClass, pretty, copyText };
+              search, resetFilters, openDetail, fmtTime, fmtNum, statusClass, pretty, copyText, short };
   }
 }).mount('#app');
 </script>

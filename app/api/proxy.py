@@ -56,6 +56,10 @@ async def _handle(request: Request, path: str) -> Any:
 
     is_stream = bool(body.get("stream", False))
     user_agent = request.headers.get("user-agent", "")
+    # 只读提取 agent_hint（不改 body，铁律）
+    ah = body.get("agent_hint") or {}
+    session_id = str(ah.get("session_id") or "")
+    parent_session_id = str(ah.get("parent_session_id") or "")
 
     ctx = RequestContext(
         source_ip=source_ip,
@@ -65,6 +69,8 @@ async def _handle(request: Request, path: str) -> Any:
         model=body.get("model"),
         is_stream=is_stream,
         request_body=body,
+        session_id=session_id,
+        parent_session_id=parent_session_id,
     )
     pipeline = get_pipeline()
     await pipeline.on_request(ctx, cfg)
@@ -74,6 +80,7 @@ async def _handle(request: Request, path: str) -> Any:
         insert_log({
             "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
             "route_name": route.name, "upstream_url": route.upstream.base_url,
+            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
             "method": request.method, "path": path, "model": body.get("model"),
             "status_code": ctx.abort_status, "latency_ms": latency, "is_stream": is_stream,
             "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
@@ -100,6 +107,7 @@ async def _do_blocking(ctx, cfg, route, path, body, incoming_headers, source_ip,
         insert_log({
             "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
             "route_name": route.name, "upstream_url": route.upstream.base_url,
+            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
             "method": "POST", "path": path, "model": body.get("model"),
             "status_code": 502, "latency_ms": latency, "is_stream": False,
             "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
@@ -112,10 +120,12 @@ async def _do_blocking(ctx, cfg, route, path, body, incoming_headers, source_ip,
     insert_log({
         "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
         "route_name": route.name, "upstream_url": route.upstream.base_url,
+        "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
         "method": "POST", "path": path, "model": result.model or body.get("model"),
         "status_code": result.status_code, "latency_ms": latency, "is_stream": False,
         "prompt_tokens": result.prompt_tokens, "completion_tokens": result.completion_tokens,
         "total_tokens": result.total_tokens,
+        "cached_tokens": result.cached_tokens, "reasoning_tokens": result.reasoning_tokens,
         "request_body": _truncate(json.dumps(ctx.request_body, ensure_ascii=False), cfg.logging.max_body_kb),
         "response_body": _truncate(result.response_body, cfg.logging.max_body_kb),
         "reasoning": _truncate(result.reasoning, cfg.logging.max_body_kb),
@@ -132,13 +142,14 @@ async def _do_blocking(ctx, cfg, route, path, body, incoming_headers, source_ip,
 async def _do_stream(request: Request, ctx, cfg, route, path, body, incoming_headers, source_ip, start, user_agent) -> Any:
     pipeline = get_pipeline()
     try:
-        resp, gen, result = await forward_stream(route, path, body, incoming_headers, float(cfg.upstream_timeout))
+        resp, gen, result = await forward_stream(route, path, body, incoming_headers, float(cfg.upstream_timeout), start)
     except Exception as e:
         latency = int((time.time() - start) * 1000)
         await pipeline.on_error(ctx, cfg, e)
         insert_log({
             "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
             "route_name": route.name, "upstream_url": route.upstream.base_url,
+            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
             "method": "POST", "path": path, "model": body.get("model"),
             "status_code": 502, "latency_ms": latency, "is_stream": True,
             "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
@@ -154,6 +165,7 @@ async def _do_stream(request: Request, ctx, cfg, route, path, body, incoming_hea
         insert_log({
             "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
             "route_name": route.name, "upstream_url": route.upstream.base_url,
+            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
             "method": "POST", "path": path, "model": body.get("model"),
             "status_code": resp.status_code, "latency_ms": latency, "is_stream": True,
             "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
@@ -174,10 +186,13 @@ async def _do_stream(request: Request, ctx, cfg, route, path, body, incoming_hea
             insert_log({
                 "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
                 "route_name": route.name, "upstream_url": route.upstream.base_url,
+                "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
                 "method": "POST", "path": path, "model": result.model or body.get("model"),
                 "status_code": result.status_code or 200, "latency_ms": latency, "is_stream": True,
+                "ttft_ms": result.ttft_ms,
                 "prompt_tokens": result.prompt_tokens, "completion_tokens": result.completion_tokens,
                 "total_tokens": result.total_tokens,
+                "cached_tokens": result.cached_tokens, "reasoning_tokens": result.reasoning_tokens,
                 "request_body": _truncate(json.dumps(ctx.request_body, ensure_ascii=False), cfg.logging.max_body_kb),
                 "response_body": _truncate(result.accumulated_content or result.response_body, cfg.logging.max_body_kb),
                 "reasoning": _truncate(result.reasoning, cfg.logging.max_body_kb),

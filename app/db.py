@@ -20,16 +20,21 @@ CREATE TABLE IF NOT EXISTS request_logs (
     ts TEXT NOT NULL,                  -- ISO8601
     source_ip TEXT,
     route_name TEXT,
+    session_id TEXT,
+    parent_session_id TEXT,
     upstream_url TEXT,
     method TEXT,
     path TEXT,
     model TEXT,
     status_code INTEGER,
     latency_ms INTEGER,
+    ttft_ms INTEGER,
     is_stream INTEGER DEFAULT 0,
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
     total_tokens INTEGER,
+    cached_tokens INTEGER,
+    reasoning_tokens INTEGER,
     request_body TEXT,
     response_body TEXT,
     reasoning TEXT,
@@ -55,8 +60,9 @@ def init_db(path: str) -> None:
         conn.executescript(SCHEMA)
         # 轻量迁移：为旧库补列
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(request_logs)")}
-        if "reasoning" not in cols:
-            conn.execute("ALTER TABLE request_logs ADD COLUMN reasoning TEXT")
+        for col in ("reasoning", "cached_tokens", "reasoning_tokens", "ttft_ms", "session_id", "parent_session_id"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE request_logs ADD COLUMN {col} TEXT")
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.commit()
         logger.info("SQLite 已初始化: %s", path)
@@ -77,24 +83,30 @@ def insert_log(data: dict[str, Any]) -> int:
     try:
         cur = conn.execute(
             """INSERT INTO request_logs
-            (ts, source_ip, route_name, upstream_url, method, path, model,
-             status_code, latency_ms, is_stream, prompt_tokens, completion_tokens,
-             total_tokens, request_body, response_body, reasoning, error, client_disconnected, user_agent)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (ts, source_ip, route_name, session_id, parent_session_id, upstream_url, method, path, model,
+             status_code, latency_ms, ttft_ms, is_stream, prompt_tokens, completion_tokens,
+             total_tokens, cached_tokens, reasoning_tokens,
+             request_body, response_body, reasoning, error, client_disconnected, user_agent)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 data.get("ts") or datetime.utcnow().isoformat(),
                 data.get("source_ip"),
                 data.get("route_name"),
+                data.get("session_id"),
+                data.get("parent_session_id"),
                 data.get("upstream_url"),
                 data.get("method"),
                 data.get("path"),
                 data.get("model"),
                 data.get("status_code"),
                 data.get("latency_ms"),
+                data.get("ttft_ms"),
                 1 if data.get("is_stream") else 0,
                 data.get("prompt_tokens"),
                 data.get("completion_tokens"),
                 data.get("total_tokens"),
+                data.get("cached_tokens"),
+                data.get("reasoning_tokens"),
                 data.get("request_body"),
                 data.get("response_body"),
                 data.get("reasoning"),
@@ -160,9 +172,10 @@ def query_logs(
     try:
         total = conn.execute(f"SELECT COUNT(*) FROM request_logs{where_sql}", params).fetchone()[0]
         rows = conn.execute(
-            f"""SELECT id, ts, source_ip, route_name, upstream_url, method, path, model,
-                      status_code, latency_ms, is_stream, prompt_tokens, completion_tokens,
-                      total_tokens, error, client_disconnected, user_agent
+            f"""SELECT id, ts, source_ip, route_name, session_id, parent_session_id, upstream_url, method, path, model,
+                      status_code, latency_ms, ttft_ms, is_stream, prompt_tokens, completion_tokens,
+                      total_tokens, cached_tokens, reasoning_tokens,
+                      error, client_disconnected, user_agent
                FROM request_logs{where_sql}
                ORDER BY id DESC LIMIT ? OFFSET ?""",
             params + [page_size, (page - 1) * page_size],

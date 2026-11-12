@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
@@ -28,6 +29,10 @@ class ForwardResult:
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
+    # 首 Token 时延（毫秒）：流式首个 chunk 收到时刻相对请求开始的时延；阻塞为 None
+    ttft_ms: Optional[int] = None
     # 流式专用
     accumulated_content: str = ""
     accumulated_reasoning: str = ""
@@ -59,10 +64,31 @@ def _upstream_headers(route: Route, incoming: dict) -> dict:
     return _passthrough_headers(incoming)
 
 
-def _maybe_map_model(body: dict, route: Route) -> None:
-    mm = route.upstream.model_mapping
-    if mm and "model" in body:
-        body["model"] = mm.get(body["model"], body["model"])
+def _parse_usage(u: dict | None) -> dict:
+    """从 usage 提取 tokens，兼容 OpenAI/DeepSeek 的 cache 与 reasoning 字段结构。
+
+    - cached_tokens: 优先 usage.prompt_tokens_details.cached_tokens（OpenAI 嵌套），
+      回退 usage.prompt_cache_hit_tokens（DeepSeek 扁平）
+    - reasoning_tokens: usage.completion_tokens_details.reasoning_tokens
+    """
+    if not u:
+        return {}
+    pd = u.get("prompt_tokens_details") or {}
+    if "cached_tokens" in pd:
+        cached = pd.get("cached_tokens") or 0
+    elif "prompt_cache_hit_tokens" in u:
+        cached = u.get("prompt_cache_hit_tokens") or 0
+    else:
+        cached = 0
+    cd = u.get("completion_tokens_details") or {}
+    reasoning = cd.get("reasoning_tokens") or 0
+    return {
+        "prompt_tokens": u.get("prompt_tokens", 0),
+        "completion_tokens": u.get("completion_tokens", 0),
+        "total_tokens": u.get("total_tokens", 0),
+        "cached_tokens": cached,
+        "reasoning_tokens": reasoning,
+    }
 
 
 async def forward_blocking(
@@ -73,7 +99,6 @@ async def forward_blocking(
     timeout: float,
 ) -> tuple[httpx.Response, ForwardResult]:
     """阻塞转发。返回 (原始 Response, 解析结果)。"""
-    _maybe_map_model(body, route)
     url = _upstream_url(route, path)
     headers = _upstream_headers(route, incoming_headers)
     result = ForwardResult()
@@ -85,10 +110,12 @@ async def forward_blocking(
             try:
                 j = resp.json()
                 result.model = j.get("model")
-                u = j.get("usage") or {}
+                u = _parse_usage(j.get("usage"))
                 result.prompt_tokens = u.get("prompt_tokens")
                 result.completion_tokens = u.get("completion_tokens")
                 result.total_tokens = u.get("total_tokens")
+                result.cached_tokens = u.get("cached_tokens")
+                result.reasoning_tokens = u.get("reasoning_tokens")
                 # 推理模型：捕获思维链
                 choices = j.get("choices") or []
                 if choices:
@@ -132,12 +159,12 @@ async def forward_stream(
     body: dict,
     incoming_headers: dict,
     timeout: float,
+    start: float = 0.0,
 ) -> tuple[httpx.Response, AsyncIterator[bytes], ForwardResult]:
     """流式转发。返回 (原始 Response, 字节迭代器, 结果对象)。
 
     调用方负责消费迭代器；迭代结束后 result.accumulated_content / usage 已填充。
     """
-    _maybe_map_model(body, route)
     url = _upstream_url(route, path)
     # 透传 agent 头（含 Authorization），保留 agent 的 Accept（流式时为 text/event-stream）
     headers = _passthrough_headers(incoming_headers)
@@ -153,6 +180,9 @@ async def forward_stream(
         buf = ""
         try:
             async for chunk in resp.aiter_bytes():
+                # 首 Token 时延：首个 chunk 收到时刻
+                if result.ttft_ms is None and start:
+                    result.ttft_ms = int((time.time() - start) * 1000)
                 # 透传
                 yield chunk
                 # 累积解析（按行）
@@ -173,9 +203,12 @@ async def forward_stream(
                         result.model = obj.get("model")
                     u = obj.get("usage")
                     if u:
-                        result.prompt_tokens = u.get("prompt_tokens", result.prompt_tokens)
-                        result.completion_tokens = u.get("completion_tokens", result.completion_tokens)
-                        result.total_tokens = u.get("total_tokens", result.total_tokens)
+                        pu = _parse_usage(u)
+                        result.prompt_tokens = pu["prompt_tokens"]
+                        result.completion_tokens = pu["completion_tokens"]
+                        result.total_tokens = pu["total_tokens"]
+                        result.cached_tokens = pu["cached_tokens"]
+                        result.reasoning_tokens = pu["reasoning_tokens"]
                     choices = obj.get("choices") or []
                     if choices:
                         delta = choices[0].get("delta") or {}

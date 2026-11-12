@@ -114,12 +114,10 @@ routes:
     source_ips: ["127.0.0.1"]
     upstream:
       base_url: "{UPSTREAM_BASE_URL}"
-      model_mapping: {{}}
   - name: default
     source_ips: ["0.0.0.0/0"]
     upstream:
       base_url: "{UPSTREAM_BASE_URL}"
-      model_mapping: {{}}
 """,
         encoding="utf-8",
     )
@@ -212,6 +210,12 @@ def test_gateway_captured_and_routed(gw):
     assert b["model"] == MODEL, f"model 异常: {b['model']}"
     assert b["status_code"] == 200, f"状态异常: {b['status_code']}"
     assert b["total_tokens"] and b["total_tokens"] > 0
+    # 阻塞详情：缓存命中 / 推理 tokens 已捕获（get_log 返回全字段）
+    with httpx.Client(timeout=30) as c:
+        bdetail = c.get(f"{base}/api/logs/{b['id']}").json()
+    assert bdetail["reasoning_tokens"] is not None and bdetail["reasoning_tokens"] > 0, \
+        f"阻塞 reasoning_tokens 未捕获: {bdetail.get('reasoning_tokens')}"
+    assert bdetail["cached_tokens"] is not None, f"阻塞 cached_tokens 未捕获"
 
     # 流式详情：汇总内容非空、推理思维链已捕获、tokens 正常
     with httpx.Client(timeout=30) as c:
@@ -222,3 +226,33 @@ def test_gateway_captured_and_routed(gw):
     assert detail["response_body"] and detail["response_body"].strip(), "流式汇总 content 为空"
     assert detail["reasoning"] and detail["reasoning"].strip(), "流式 reasoning 未捕获"
     assert detail["total_tokens"] and detail["total_tokens"] > 0
+    assert detail["reasoning_tokens"] is not None and detail["reasoning_tokens"] > 0, \
+        f"流式 reasoning_tokens 未捕获: {detail.get('reasoning_tokens')}"
+    assert detail["cached_tokens"] is not None, f"流式 cached_tokens 未捕获"
+
+
+def test_agent_hint_session(gw):
+    """agent_hint 中的 session_id / parent_session_id 被捕获；且 body 原样落库（铁律：不改输入）。"""
+    base = gw["base"]
+    key = _get_api_key()
+    sid, pid = "test-sess-123", "test-parent-456"
+    with httpx.Client(timeout=60) as c:
+        r = c.post(
+            f"{base}/v1/chat/completions",
+            json={"model": MODEL, "max_tokens": 16,
+                  "messages": [{"role": "user", "content": "hi"}],
+                  "agent_hint": {"session_id": sid, "parent_session_id": pid}},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+    assert r.status_code == 200, f"期望 200，实际 {r.status_code}: {r.text[:200]}"
+
+    with httpx.Client(timeout=30) as c:
+        d = c.get(f"{base}/api/logs", params={"page": 1, "page_size": 1}).json()
+        it = d["items"][0]
+        detail = c.get(f"{base}/api/logs/{it['id']}").json()
+    assert it["session_id"] == sid, f"session_id 未捕获: {it.get('session_id')}"
+    assert it["parent_session_id"] == pid, f"parent_session_id 未捕获: {it.get('parent_session_id')}"
+    # 铁律：agent_hint 仍保留在落库的 request_body 中（网关未修改输入）
+    import json as _json
+    body = _json.loads(detail["request_body"]) if isinstance(detail["request_body"], str) else detail["request_body"]
+    assert body.get("agent_hint", {}).get("session_id") == sid, "request_body 中 agent_hint 丢失（违反铁律）"

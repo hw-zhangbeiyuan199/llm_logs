@@ -65,20 +65,17 @@ routes:
       - "10.0.0.5"
     upstream:
       base_url: "https://api.openai.com/v1"
-      model_mapping: {}
   - name: default
     source_ips:
       - "0.0.0.0/0"
     upstream:
       base_url: "https://api.deepseek.com"
-      model_mapping: {}
 """
 
 
 @dataclass
 class Upstream:
     base_url: str
-    model_mapping: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -159,7 +156,6 @@ def _build_route(raw: dict) -> Route:
     base_url = _resolve_env(str(up_raw.get("base_url", ""))).rstrip("/")
     upstream = Upstream(
         base_url=base_url,
-        model_mapping=dict(up_raw.get("model_mapping") or {}),
     )
     exact: set[str] = set()
     cidrs: list[ipaddress._BaseNetwork] = []
@@ -338,8 +334,7 @@ class ConfigManager:
             "retention": {"enabled": cfg.retention.enabled, "days": cfg.retention.days},
             "routes": [
                 {"name": r.name, "source_ips": r.source_ips,
-                 "upstream": {"base_url": r.upstream.base_url,
-                              "model_mapping": r.upstream.model_mapping}}
+                 "upstream": {"base_url": r.upstream.base_url}}
                 for r in cfg.routes
             ],
             "last_loaded_at": cfg.last_loaded_at,
