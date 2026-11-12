@@ -94,6 +94,13 @@
       <label>路由 <input v-model="filters.route_name" placeholder="" style="width:100px"/></label>
       <button class="btn btn-primary" @click="search">查询</button>
       <button class="btn" @click="resetFilters">重置</button>
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+        <label class="muted" style="font-size:12px;">下载最新
+          <input type="number" v-model.number="downloadLimit" min="1" max="10000" style="width:64px;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 6px;font-size:12px;" />
+          条
+        </label>
+        <button class="btn" @click="downloadExcel">下载Excel</button>
+      </div>
     </div>
 
     <table>
@@ -109,8 +116,8 @@
           <td class="muted">{{fmtTime(r.ts)}}</td>
           <td>{{r.route_name}}</td>
           <td>{{r.model || '-'}}</td>
-          <td class="muted sid" :title="r.session_id">{{short(r.session_id)}}</td>
-          <td class="muted sid" :title="r.parent_session_id">{{short(r.parent_session_id)}}</td>
+          <td class="muted sid" :title="r.session_id">{{shortSid(r.session_id)}}</td>
+          <td class="muted sid" :title="r.parent_session_id">{{shortSid(r.parent_session_id)}}</td>
           <td><span class="tag" :class="r.is_stream?'stream':'block'">{{r.is_stream?'流':'阻'}}</span></td>
           <td><span class="status" :class="statusClass(r.status_code)">{{r.status_code || 'ERR'}}</span></td>
           <td class="muted">{{fmtNum(r.latency_ms)}} ms</td>
@@ -218,7 +225,8 @@ createApp({
     const filters = reactive({ keyword:'', source_ip:'', model:'', status:'', is_stream:'', route_name:'', page:1, page_size:20 });
     const detail = ref(null);
     const loading = ref(false);
-    const autoRefresh = ref(false);
+    const autoRefresh = ref(true);
+    const downloadLimit = ref(100);
     const configEditor = reactive({ open:false, text:'', saving:false, result:null });
     let timer = null, refreshTimer = null;
 
@@ -285,6 +293,7 @@ createApp({
     function statusClass(c) { return c==null?'err':(c>=200&&c<300?'ok':'err'); }
     function pretty(s) { if(!s) return '(空)'; try { return JSON.stringify(JSON.parse(s), null, 2); } catch(e) { return s; } }
     function short(s, n=16) { return s ? (s.length>n ? s.slice(0,n)+'…' : s) : '-'; }
+    function shortSid(s) { if (!s) return '-'; return s.length < 9 ? s : s.slice(0,4) + '~' + s.slice(-4); }
     async function copyText(text, ev) {
       const btn = ev && ev.target ? ev.target.closest('button') : null;
       const done = () => { if (btn) { const o = btn.textContent; btn.textContent = '已复制'; setTimeout(() => btn.textContent = o, 1200); } };
@@ -299,16 +308,25 @@ createApp({
       }
     }
 
-    onMounted(() => { loadStats(); loadLogs(); timer=setInterval(loadStats, 15000); });
+    function downloadExcel() {
+      const n = downloadLimit.value || 100;
+      window.location.href = '/api/logs/export?limit=' + Math.max(1, Math.min(n, 10000));
+    }
+
+    onMounted(() => {
+      loadStats(); loadLogs();
+      timer = setInterval(loadStats, 15000);
+      if (autoRefresh.value) { refreshTimer = setInterval(loadLogs, 5000); }
+    });
     onUnmounted(() => { clearInterval(timer); clearInterval(refreshTimer); });
     watch(autoRefresh, (v) => {
       if (v) { refreshTimer = setInterval(loadLogs, 5000); }
       else { clearInterval(refreshTimer); refreshTimer = null; }
     });
 
-    return { stats, logs, filters, detail, loading, autoRefresh, configEditor, totalPages, errCount,
-             loadLogs, loadStats, refreshAll, openConfigEditor, saveConfig,
-              search, resetFilters, openDetail, fmtTime, fmtNum, statusClass, pretty, copyText, short };
+    return { stats, logs, filters, detail, loading, autoRefresh, downloadLimit, configEditor, totalPages, errCount,
+             loadLogs, loadStats, refreshAll, downloadExcel, openConfigEditor, saveConfig,
+             search, resetFilters, openDetail, fmtTime, fmtNum, statusClass, pretty, copyText, short, shortSid };
   }
 }).mount('#app');
 </script>

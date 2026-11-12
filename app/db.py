@@ -186,6 +186,25 @@ def query_logs(
         conn.close()
 
 
+def export_logs(limit: int = 100) -> list[dict]:
+    """取最新 N 条记录（全字段），供导出。"""
+    limit = max(1, min(limit, 10000))
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            """SELECT id, ts, source_ip, route_name, session_id, parent_session_id,
+                      upstream_url, method, path, model, status_code, latency_ms, ttft_ms,
+                      is_stream, prompt_tokens, completion_tokens, total_tokens,
+                      cached_tokens, reasoning_tokens, request_body, response_body,
+                      reasoning, error, user_agent
+               FROM request_logs ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_log(log_id: int) -> Optional[dict]:
     conn = _conn()
     try:
