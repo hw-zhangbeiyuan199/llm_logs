@@ -106,7 +106,7 @@
     <table>
       <thead>
         <tr>
-          <th>ID</th><th>时间</th><th>路由</th><th>模型</th><th>session_id</th><th>parent_session_id</th>
+          <th>ID</th><th>时间</th><th>模型</th><th>session_id</th><th>parent_session_id</th>
           <th>模式</th><th>状态</th><th>耗时</th><th>首Token</th><th>输入</th><th>输出</th><th>缓存命中</th><th>推理</th><th>总计</th>
         </tr>
       </thead>
@@ -114,7 +114,6 @@
         <tr v-for="r in logs.items" :key="r.id" @click="openDetail(r.id)">
           <td>{{r.id}}</td>
           <td class="muted">{{fmtTime(r.ts)}}</td>
-          <td>{{r.route_name}}</td>
           <td>{{r.model || '-'}}</td>
           <td class="muted sid" :title="r.session_id">{{shortSid(r.session_id)}}</td>
           <td class="muted sid" :title="r.parent_session_id">{{shortSid(r.parent_session_id)}}</td>
@@ -128,7 +127,7 @@
           <td class="muted">{{fmtNum(r.reasoning_tokens)}}</td>
           <td class="muted">{{fmtNum(r.total_tokens)}}</td>
         </tr>
-        <tr v-if="!logs.items.length"><td colspan="15" class="muted" style="text-align:center;padding:30px;">暂无记录</td></tr>
+        <tr v-if="!logs.items.length"><td colspan="14" class="muted" style="text-align:center;padding:30px;">暂无记录</td></tr>
       </tbody>
     </table>
 
