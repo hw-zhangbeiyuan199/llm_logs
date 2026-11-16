@@ -100,6 +100,7 @@
           条
         </label>
         <button class="btn" @click="downloadExcel">下载Excel</button>
+        <button class="btn" @click="clearAll" style="color:var(--red);">清空</button>
       </div>
     </div>
 
@@ -311,6 +312,15 @@ createApp({
       const n = downloadLimit.value || 100;
       window.location.href = '/api/logs/export?limit=' + Math.max(1, Math.min(n, 10000));
     }
+    async function clearAll() {
+      if (!confirm('确认清空全部请求日志？此操作不可恢复。')) return;
+      try {
+        const r = await fetch('/admin/logs/clear', { method: 'POST' });
+        const d = await r.json();
+        alert('已清空 ' + (d.deleted || 0) + ' 条记录');
+        loadLogs(); loadStats();
+      } catch (e) { alert('清空失败: ' + e); }
+    }
 
     onMounted(() => {
       loadStats(); loadLogs();
@@ -324,7 +334,7 @@ createApp({
     });
 
     return { stats, logs, filters, detail, loading, autoRefresh, downloadLimit, configEditor, totalPages, errCount,
-             loadLogs, loadStats, refreshAll, downloadExcel, openConfigEditor, saveConfig,
+             loadLogs, loadStats, refreshAll, downloadExcel, clearAll, openConfigEditor, saveConfig,
              search, resetFilters, openDetail, fmtTime, fmtNum, statusClass, pretty, copyText, short, shortSid };
   }
 }).mount('#app');

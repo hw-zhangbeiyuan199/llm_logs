@@ -258,3 +258,14 @@ def cleanup_old(days: int) -> int:
         return cur.rowcount
     finally:
         conn.close()
+
+
+def clear_all_logs() -> int:
+    """清空全部请求日志，返回删除条数。"""
+    conn = _conn()
+    try:
+        cur = conn.execute("DELETE FROM request_logs")
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()

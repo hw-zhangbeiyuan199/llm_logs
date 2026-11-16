@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 
 from app.config import CONFIG_PATH, get_config_manager
-from app.db import cleanup_old
+from app.db import clear_all_logs, cleanup_old
 
 router = APIRouter(prefix="/admin")
 
@@ -71,4 +71,11 @@ async def reload_config():
 @router.post("/retention/cleanup")
 async def retention_cleanup(days: int = 30):
     n = cleanup_old(days)
+    return {"deleted": n}
+
+
+@router.post("/logs/clear")
+async def logs_clear():
+    """清空全部请求日志（不可恢复）。"""
+    n = clear_all_logs()
     return {"deleted": n}

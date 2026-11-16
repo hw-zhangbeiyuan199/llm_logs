@@ -1,5 +1,5 @@
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8000
 
 # 是否信任 X-Forwarded-For 取真实客户端 IP（部署在反代后时设为 true）
