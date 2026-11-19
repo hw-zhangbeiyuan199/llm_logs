@@ -4,12 +4,14 @@
 - 流式：逐 chunk 透传给客户端，同时后台累积 delta 文本 + usage，结束后汇总
 - 上游 4xx/5xx 原样透传状态码与 body
 """
+
 from __future__ import annotations
 
+import codecs
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 import httpx
@@ -39,6 +41,14 @@ class ForwardResult:
     client_disconnected: bool = False
     # 推理模型：思维链（阻塞模式从 message.reasoning_content 取）
     reasoning: str = ""
+    # 流式聚合的响应元信息与工具调用
+    response_id: Optional[str] = None
+    created: Optional[int] = None
+    role: Optional[str] = None
+    finish_reason: Optional[str] = None
+    tool_calls: list = field(default_factory=list)
+    # 上游原始 usage 对象（原样回填进重构响应，保留缓存/推理等全部字段）
+    raw_usage: Optional[dict] = None
 
 
 def _upstream_url(route: Route, path: str) -> str:
@@ -153,6 +163,79 @@ def _parse_sse_delta(line: str) -> dict:
     return {}
 
 
+def _merge_tool_call(acc: dict, tc: dict) -> None:
+    """按 index 聚合一条 tool_call 分片：id/type/name 记录一次，arguments 顺序拼接。"""
+    idx = tc.get("index")
+    if idx is None:
+        idx = len(acc)
+    entry = acc.get(idx)
+    if entry is None:
+        entry = {}
+        acc[idx] = entry
+    if tc.get("id"):
+        entry["id"] = tc["id"]
+    if tc.get("type"):
+        entry["type"] = tc["type"]
+    fn = tc.get("function") or {}
+    f = entry.setdefault("function", {})
+    if fn.get("name"):
+        f["name"] = fn["name"]
+    if fn.get("arguments"):
+        f["arguments"] = f.get("arguments", "") + fn["arguments"]
+
+
+def _build_stream_response(result: "ForwardResult") -> str:
+    """流结束时将聚合到的全部返回信息重构为与阻塞模式同构的完整响应 JSON。
+
+    只包含实际出现的字段；流式聚合任何信息都没拿到时返回空串。
+    """
+    if not (
+        result.accumulated_content
+        or result.accumulated_reasoning
+        or result.tool_calls
+        or result.model
+        or result.finish_reason
+        or result.raw_usage
+        or result.prompt_tokens is not None
+    ):
+        return ""
+    message: dict = {"role": result.role or "assistant"}
+    if result.accumulated_content:
+        message["content"] = result.accumulated_content
+    if result.accumulated_reasoning:
+        message["reasoning_content"] = result.accumulated_reasoning
+    if result.tool_calls:
+        message["tool_calls"] = result.tool_calls
+    out: dict = {
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": result.finish_reason,
+                "message": message,
+            }
+        ],
+    }
+    if result.response_id:
+        out["id"] = result.response_id
+    if result.created is not None:
+        out["created"] = result.created
+    if result.model:
+        out["model"] = result.model
+    if result.raw_usage:
+        out["usage"] = result.raw_usage
+    elif (
+        result.prompt_tokens is not None
+        or result.completion_tokens is not None
+        or result.total_tokens is not None
+    ):
+        out["usage"] = {
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens": result.total_tokens,
+        }
+    return json.dumps(out, ensure_ascii=False)
+
+
 async def forward_stream(
     route: Route,
     path: str,
@@ -177,7 +260,53 @@ async def forward_stream(
     result.status_code = resp.status_code
 
     async def gen() -> AsyncIterator[bytes]:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         buf = ""
+        tool_call_acc: dict = {}
+
+        def process_line(line: str) -> None:
+            line = line.rstrip("\r")
+            if not line:
+                return
+            obj = _parse_sse_delta(line)
+            if obj.get("__done__"):
+                return
+            if "model" in obj and result.model is None:
+                result.model = obj.get("model")
+            if result.response_id is None and obj.get("id"):
+                result.response_id = obj.get("id")
+            if result.created is None and obj.get("created") is not None:
+                result.created = obj.get("created")
+            u = obj.get("usage")
+            if u:
+                result.raw_usage = u
+                pu = _parse_usage(u)
+                result.prompt_tokens = pu["prompt_tokens"]
+                result.completion_tokens = pu["completion_tokens"]
+                result.total_tokens = pu["total_tokens"]
+                result.cached_tokens = pu["cached_tokens"]
+                result.reasoning_tokens = pu["reasoning_tokens"]
+            choices = obj.get("choices") or []
+            if choices:
+                ch = choices[0] or {}
+                fr = ch.get("finish_reason")
+                if fr:
+                    result.finish_reason = fr
+                delta = ch.get("delta") or {}
+                if delta.get("role"):
+                    result.role = delta.get("role")
+                c = delta.get("content")
+                if c:
+                    result.accumulated_content += c
+                rc = delta.get("reasoning_content")
+                if rc:
+                    result.accumulated_reasoning += rc
+                tcs = delta.get("tool_calls")
+                if tcs:
+                    for tc in tcs:
+                        if isinstance(tc, dict):
+                            _merge_tool_call(tool_call_acc, tc)
+
         try:
             async for chunk in resp.aiter_bytes():
                 # 首 Token 时延：首个 chunk 收到时刻
@@ -185,44 +314,22 @@ async def forward_stream(
                     result.ttft_ms = int((time.time() - start) * 1000)
                 # 透传
                 yield chunk
-                # 累积解析（按行）
-                try:
-                    text = chunk.decode("utf-8", errors="replace")
-                except Exception:
-                    continue
-                buf += text
+                # 累积解析（按行，增量解码避免多字节字符被 chunk 边界截断）
+                buf += decoder.decode(chunk)
                 while "\n" in buf:
                     line, buf = buf.split("\n", 1)
-                    line = line.rstrip("\r")
-                    if not line:
-                        continue
-                    obj = _parse_sse_delta(line)
-                    if obj.get("__done__"):
-                        continue
-                    if "model" in obj and result.model is None:
-                        result.model = obj.get("model")
-                    u = obj.get("usage")
-                    if u:
-                        pu = _parse_usage(u)
-                        result.prompt_tokens = pu["prompt_tokens"]
-                        result.completion_tokens = pu["completion_tokens"]
-                        result.total_tokens = pu["total_tokens"]
-                        result.cached_tokens = pu["cached_tokens"]
-                        result.reasoning_tokens = pu["reasoning_tokens"]
-                    choices = obj.get("choices") or []
-                    if choices:
-                        delta = choices[0].get("delta") or {}
-                        c = delta.get("content")
-                        if c:
-                            result.accumulated_content += c
-                        rc = delta.get("reasoning_content")
-                        if rc:
-                            result.accumulated_reasoning += rc
+                    process_line(line)
+            # 处理末尾不带换行的残留行
+            if buf:
+                process_line(buf)
+                buf = ""
         except Exception as e:
             result.error = f"stream error: {e}"
             logger.warning("流式传输异常: %s", e)
         finally:
-            result.response_body = result.accumulated_content
+            if tool_call_acc:
+                result.tool_calls = [tool_call_acc[k] for k in sorted(tool_call_acc)]
+            result.response_body = _build_stream_response(result)
             result.reasoning = result.accumulated_reasoning
             await resp.aclose()
             await client.aclose()

@@ -2,6 +2,7 @@
 
 支持阻塞与流式（stream: true）。
 """
+
 from __future__ import annotations
 
 import json
@@ -77,129 +78,255 @@ async def _handle(request: Request, path: str) -> Any:
     if ctx.aborted:
         # 限流等中止也记录一条日志
         latency = int((time.time() - start) * 1000)
-        insert_log({
-            "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
-            "route_name": route.name, "upstream_url": route.upstream.base_url,
-            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
-            "method": request.method, "path": path, "model": body.get("model"),
-            "status_code": ctx.abort_status, "latency_ms": latency, "is_stream": is_stream,
-            "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
-            "response_body": ctx.abort_message, "error": ctx.abort_message,
-            "user_agent": user_agent,
-        })
+        insert_log(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "source_ip": source_ip,
+                "route_name": route.name,
+                "upstream_url": route.upstream.base_url,
+                "session_id": ctx.session_id,
+                "parent_session_id": ctx.parent_session_id,
+                "method": request.method,
+                "path": path,
+                "model": body.get("model"),
+                "status_code": ctx.abort_status,
+                "latency_ms": latency,
+                "is_stream": is_stream,
+                "request_body": _truncate(
+                    json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb
+                ),
+                "response_body": ctx.abort_message,
+                "error": ctx.abort_message,
+                "user_agent": user_agent,
+            }
+        )
         return JSONResponse({"error": ctx.abort_message}, status_code=ctx.abort_status)
 
     incoming_headers = dict(request.headers)
 
     if is_stream:
-        return await _do_stream(request, ctx, cfg, route, path, body, incoming_headers, source_ip, start, user_agent)
+        return await _do_stream(
+            request,
+            ctx,
+            cfg,
+            route,
+            path,
+            body,
+            incoming_headers,
+            source_ip,
+            start,
+            user_agent,
+        )
     else:
-        return await _do_blocking(ctx, cfg, route, path, body, incoming_headers, source_ip, start, user_agent)
+        return await _do_blocking(
+            ctx, cfg, route, path, body, incoming_headers, source_ip, start, user_agent
+        )
 
 
-async def _do_blocking(ctx, cfg, route, path, body, incoming_headers, source_ip, start, user_agent) -> Any:
+async def _do_blocking(
+    ctx, cfg, route, path, body, incoming_headers, source_ip, start, user_agent
+) -> Any:
     pipeline = get_pipeline()
     try:
-        resp, result = await forward_blocking(route, path, body, incoming_headers, float(cfg.upstream_timeout))
+        resp, result = await forward_blocking(
+            route, path, body, incoming_headers, float(cfg.upstream_timeout)
+        )
     except Exception as e:
         latency = int((time.time() - start) * 1000)
         await pipeline.on_error(ctx, cfg, e)
-        insert_log({
-            "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
-            "route_name": route.name, "upstream_url": route.upstream.base_url,
-            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
-            "method": "POST", "path": path, "model": body.get("model"),
-            "status_code": 502, "latency_ms": latency, "is_stream": False,
-            "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
-            "error": str(e), "user_agent": user_agent,
-        })
-        return JSONResponse({"error": "upstream error", "detail": str(e)}, status_code=502)
+        insert_log(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "source_ip": source_ip,
+                "route_name": route.name,
+                "upstream_url": route.upstream.base_url,
+                "session_id": ctx.session_id,
+                "parent_session_id": ctx.parent_session_id,
+                "method": "POST",
+                "path": path,
+                "model": body.get("model"),
+                "status_code": 502,
+                "latency_ms": latency,
+                "is_stream": False,
+                "request_body": _truncate(
+                    json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb
+                ),
+                "error": str(e),
+                "user_agent": user_agent,
+            }
+        )
+        return JSONResponse(
+            {"error": "upstream error", "detail": str(e)}, status_code=502
+        )
 
     await pipeline.on_response(ctx, cfg)
     latency = int((time.time() - start) * 1000)
-    insert_log({
-        "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
-        "route_name": route.name, "upstream_url": route.upstream.base_url,
-        "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
-        "method": "POST", "path": path, "model": result.model or body.get("model"),
-        "status_code": result.status_code, "latency_ms": latency, "is_stream": False,
-        "prompt_tokens": result.prompt_tokens, "completion_tokens": result.completion_tokens,
-        "total_tokens": result.total_tokens,
-        "cached_tokens": result.cached_tokens, "reasoning_tokens": result.reasoning_tokens,
-        "request_body": _truncate(json.dumps(ctx.request_body, ensure_ascii=False), cfg.logging.max_body_kb),
-        "response_body": _truncate(result.response_body, cfg.logging.max_body_kb),
-        "reasoning": _truncate(result.reasoning, cfg.logging.max_body_kb),
-        "error": result.error or (None if result.status_code < 400 else result.response_body[:500]),
-        "user_agent": user_agent,
-    })
+    insert_log(
+        {
+            "ts": datetime.utcnow().isoformat(),
+            "source_ip": source_ip,
+            "route_name": route.name,
+            "upstream_url": route.upstream.base_url,
+            "session_id": ctx.session_id,
+            "parent_session_id": ctx.parent_session_id,
+            "method": "POST",
+            "path": path,
+            "model": result.model or body.get("model"),
+            "status_code": result.status_code,
+            "latency_ms": latency,
+            "is_stream": False,
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens": result.total_tokens,
+            "cached_tokens": result.cached_tokens,
+            "reasoning_tokens": result.reasoning_tokens,
+            "request_body": _truncate(
+                json.dumps(ctx.request_body, ensure_ascii=False),
+                cfg.logging.max_body_kb,
+            ),
+            "response_body": _truncate(result.response_body, cfg.logging.max_body_kb),
+            "reasoning": _truncate(result.reasoning, cfg.logging.max_body_kb),
+            "error": result.error
+            or (None if result.status_code < 400 else result.response_body[:500]),
+            "user_agent": user_agent,
+        }
+    )
 
     # 原样透传响应
     headers = {"content-type": resp.headers.get("content-type", "application/json")}
-    return JSONResponse(content=resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text,
-                        status_code=resp.status_code, headers=headers)
+    return JSONResponse(
+        content=resp.json()
+        if resp.headers.get("content-type", "").startswith("application/json")
+        else resp.text,
+        status_code=resp.status_code,
+        headers=headers,
+    )
 
 
-async def _do_stream(request: Request, ctx, cfg, route, path, body, incoming_headers, source_ip, start, user_agent) -> Any:
+async def _do_stream(
+    request: Request,
+    ctx,
+    cfg,
+    route,
+    path,
+    body,
+    incoming_headers,
+    source_ip,
+    start,
+    user_agent,
+) -> Any:
     pipeline = get_pipeline()
     try:
-        resp, gen, result = await forward_stream(route, path, body, incoming_headers, float(cfg.upstream_timeout), start)
+        resp, gen, result = await forward_stream(
+            route, path, body, incoming_headers, float(cfg.upstream_timeout), start
+        )
     except Exception as e:
         latency = int((time.time() - start) * 1000)
         await pipeline.on_error(ctx, cfg, e)
-        insert_log({
-            "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
-            "route_name": route.name, "upstream_url": route.upstream.base_url,
-            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
-            "method": "POST", "path": path, "model": body.get("model"),
-            "status_code": 502, "latency_ms": latency, "is_stream": True,
-            "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
-            "error": str(e), "user_agent": user_agent,
-        })
-        return JSONResponse({"error": "upstream error", "detail": str(e)}, status_code=502)
+        insert_log(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "source_ip": source_ip,
+                "route_name": route.name,
+                "upstream_url": route.upstream.base_url,
+                "session_id": ctx.session_id,
+                "parent_session_id": ctx.parent_session_id,
+                "method": "POST",
+                "path": path,
+                "model": body.get("model"),
+                "status_code": 502,
+                "latency_ms": latency,
+                "is_stream": True,
+                "request_body": _truncate(
+                    json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb
+                ),
+                "error": str(e),
+                "user_agent": user_agent,
+            }
+        )
+        return JSONResponse(
+            {"error": "upstream error", "detail": str(e)}, status_code=502
+        )
 
     if resp.status_code >= 400:
         # 上游错误：读取完整 body 后透传
         err_body = await resp.aread()
         await resp.aclose()
         latency = int((time.time() - start) * 1000)
-        insert_log({
-            "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
-            "route_name": route.name, "upstream_url": route.upstream.base_url,
-            "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
-            "method": "POST", "path": path, "model": body.get("model"),
-            "status_code": resp.status_code, "latency_ms": latency, "is_stream": True,
-            "request_body": _truncate(json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb),
-            "response_body": _truncate(err_body.decode("utf-8", "replace"), cfg.logging.max_body_kb),
-            "error": err_body.decode("utf-8", "replace")[:500],
-            "user_agent": user_agent,
-        })
-        return JSONResponse({"error": "upstream error", "detail": err_body.decode("utf-8", "replace")},
-                            status_code=resp.status_code)
+        insert_log(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "source_ip": source_ip,
+                "route_name": route.name,
+                "upstream_url": route.upstream.base_url,
+                "session_id": ctx.session_id,
+                "parent_session_id": ctx.parent_session_id,
+                "method": "POST",
+                "path": path,
+                "model": body.get("model"),
+                "status_code": resp.status_code,
+                "latency_ms": latency,
+                "is_stream": True,
+                "request_body": _truncate(
+                    json.dumps(body, ensure_ascii=False), cfg.logging.max_body_kb
+                ),
+                "response_body": _truncate(
+                    err_body.decode("utf-8", "replace"), cfg.logging.max_body_kb
+                ),
+                "error": err_body.decode("utf-8", "replace")[:500],
+                "user_agent": user_agent,
+            }
+        )
+        return JSONResponse(
+            {"error": "upstream error", "detail": err_body.decode("utf-8", "replace")},
+            status_code=resp.status_code,
+        )
 
     async def stream_with_log():
         try:
             async for chunk in gen:
                 yield chunk
         finally:
+            # 客户端提前断开时确保内部生成器收尾（构建完整响应、释放上游连接）
+            try:
+                await gen.aclose()
+            except Exception:
+                pass
             await pipeline.on_response(ctx, cfg)
             latency = int((time.time() - start) * 1000)
-            insert_log({
-                "ts": datetime.utcnow().isoformat(), "source_ip": source_ip,
-                "route_name": route.name, "upstream_url": route.upstream.base_url,
-                "session_id": ctx.session_id, "parent_session_id": ctx.parent_session_id,
-                "method": "POST", "path": path, "model": result.model or body.get("model"),
-                "status_code": result.status_code or 200, "latency_ms": latency, "is_stream": True,
-                "ttft_ms": result.ttft_ms,
-                "prompt_tokens": result.prompt_tokens, "completion_tokens": result.completion_tokens,
-                "total_tokens": result.total_tokens,
-                "cached_tokens": result.cached_tokens, "reasoning_tokens": result.reasoning_tokens,
-                "request_body": _truncate(json.dumps(ctx.request_body, ensure_ascii=False), cfg.logging.max_body_kb),
-                "response_body": _truncate(result.accumulated_content or result.response_body, cfg.logging.max_body_kb),
-                "reasoning": _truncate(result.reasoning, cfg.logging.max_body_kb),
-                "error": result.error or None,
-                "client_disconnected": result.client_disconnected,
-                "user_agent": user_agent,
-            })
+            insert_log(
+                {
+                    "ts": datetime.utcnow().isoformat(),
+                    "source_ip": source_ip,
+                    "route_name": route.name,
+                    "upstream_url": route.upstream.base_url,
+                    "session_id": ctx.session_id,
+                    "parent_session_id": ctx.parent_session_id,
+                    "method": request.method,
+                    "path": path,
+                    "model": result.model or body.get("model"),
+                    "status_code": result.status_code or 200,
+                    "latency_ms": latency,
+                    "is_stream": True,
+                    "ttft_ms": result.ttft_ms,
+                    "prompt_tokens": result.prompt_tokens,
+                    "completion_tokens": result.completion_tokens,
+                    "total_tokens": result.total_tokens,
+                    "cached_tokens": result.cached_tokens,
+                    "reasoning_tokens": result.reasoning_tokens,
+                    "request_body": _truncate(
+                        json.dumps(ctx.request_body, ensure_ascii=False),
+                        cfg.logging.max_body_kb,
+                    ),
+                    "response_body": _truncate(
+                        result.response_body, cfg.logging.max_body_kb
+                    ),
+                    "reasoning": _truncate(result.reasoning, cfg.logging.max_body_kb),
+                    "error": result.error or None,
+                    "client_disconnected": result.client_disconnected,
+                    "user_agent": user_agent,
+                }
+            )
 
     return StreamingResponse(
         stream_with_log(),
@@ -229,12 +356,18 @@ async def list_models(request: Request) -> Any:
     source_ip = _client_ip(request)
     route = resolve_route(source_ip, cfg)
     url = route.upstream.base_url.rstrip("/") + "/models"
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in ("host", "content-length", "connection")}
+    headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length", "connection")
+    }
     import httpx
+
     async with httpx.AsyncClient(timeout=float(cfg.upstream_timeout)) as client:
         try:
             resp = await client.get(url, headers=headers)
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
-            return JSONResponse({"error": "upstream error", "detail": str(e)}, status_code=502)
+            return JSONResponse(
+                {"error": "upstream error", "detail": str(e)}, status_code=502
+            )

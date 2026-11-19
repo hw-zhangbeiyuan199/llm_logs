@@ -1,0 +1,48 @@
+# LLM Gateway 配置模板
+# 用法：复制为 config.yaml 后按需修改
+# 除 server.* 与 logging.db_path 需重启外，其余配置均热重载（保存后约 2 秒生效）
+
+server:
+  host: "127.0.0.1"      # 仅本机访问；局域网/反代后改为 0.0.0.0（重启生效）
+  port: 8000             # 监听端口（重启生效）
+
+# 是否信任 X-Forwarded-For 取真实客户端 IP（部署在反代后时设为 true）
+trust_forwarded_for: false
+
+# 上游请求超时（秒），流式建议设大
+upstream_timeout: 300
+
+# 日志
+logging:
+  db_path: "data/llm_gateway.db"
+  max_body_kb: 512        # 单条请求/响应体存储上限，超出截断
+  mask_keys: true         # 日志与 /admin/config 中对 api_key 脱敏
+
+# 限流（默认关闭）：按源 IP 每分钟请求数
+rate_limit:
+  enabled: false
+  requests_per_minute: 60
+
+# 日志保留（默认关闭）：自动清理超过 N 天的记录
+retention:
+  enabled: false
+  days: 30
+
+# 路由规则：按顺序匹配，首条命中生效；未命中任何 source_ips 走 default
+# base_url 约定：网关在其后拼接 /chat/completions
+#   - OpenAI:   "https://api.openai.com/v1"
+#   - DeepSeek: "https://api.deepseek.com"（无需 /v1）
+#   - Ollama:   "http://localhost:11434/v1"
+# 网关只改指向，不替换 api_key：agent 自带 Authorization 原样透传给上游
+routes:
+  - name: office                   # 示例：特定网段走 OpenAI
+    source_ips:                    # 支持精确 IP 与 CIDR
+      - "192.168.1.0/24"
+      - "10.0.0.5"
+    upstream:
+      base_url: "https://api.openai.com/v1"
+  - name: default                  # 兜底：其余全部流量
+    source_ips:
+      - "0.0.0.0/0"
+    upstream:
+      base_url: "https://api.deepseek.com"

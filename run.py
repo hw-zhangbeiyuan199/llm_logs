@@ -1,4 +1,9 @@
 """LLM Gateway - 一条命令启动。"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import uvicorn
 from app.config import get_config_manager
 
