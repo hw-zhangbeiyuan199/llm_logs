@@ -6,10 +6,11 @@
 
 ```bash
 pip install -r requirements.txt
+cp config.example.yaml config.yaml    # 启动前必须先根据模板创建 config.yaml（Windows: copy）
 python run.py
 ```
 
-首次运行会自动生成 `config.yaml` 与 `data/` 目录；也可直接复制 `config.example.yaml` 为 `config.yaml` 后修改。默认监听 `127.0.0.1:8000`（仅本机访问；对外服务改 `server.host: 0.0.0.0` 后重启）。默认路由 office→OpenAI、default→DeepSeek，见模板文件。
+`config.yaml` 是本地环境配置（已 gitignore，不入库），复制模板后按需修改监听地址、端口与上游路由；`data/` 目录首次运行自动创建。默认监听 `127.0.0.1:8000`（仅本机访问；对外服务改 `server.host: 0.0.0.0` 后重启）。默认路由 office→OpenAI、default→DeepSeek，见模板文件。
 
 - 前台面板：http://localhost:8000/
 - 转发端点：`POST http://localhost:8000/v1/chat/completions`、`/v1/completions`、`GET /v1/models`
